@@ -1,58 +1,46 @@
-pragma solidity ^0.4.18;
+pragma solidity ^0.4.24;
 
-import "./interfaces/ERC223.sol";
+import "./math/SafeMath.sol";
+import "./Ownable.sol";
+import "./Token/ERC20.sol";
 
-contract ColdStorage {
-    ERC223 token;
-    address backend;
+contract ColdStorage is Ownable {
+    using SafeMath for uint8;
+    using SafeMath for uint256;
+
+    ERC20 token;
+
+    uint public lockupEnds;
+    uint public lockupPeriod;
+    bool public storageInitialized = false;
+    address public founders;
 
     event StorageInitialized(address _to, uint _tokens);
     event TokensReleased(address _to, uint _tokensReleased);
 
-    uint public lockupEnds;
-    address public team;
-
-    function ColdStorage(address _token) public {
+    constructor(address _token) public {
         require( _token != 0x0 );
-        token = ERC223(_token);
-        backend = msg.sender;
+        token = ERC20(_token);
+        uint lockupYears = 2;
+        lockupPeriod = lockupYears.mul(365 days);
+    }
+
+    function initializeHolding(address _to, uint _tokens) onlyOwner public {
+        require( !storageInitialized );
+        assert( token.balanceOf(address(this)) != 0 );
+
+        lockupEnds = now.add(lockupPeriod);
+        founders = _to;
+        storageInitialized = true;
+        emit StorageInitialized(_to, _tokens);
     }
 
     function claimTokens() external {
         require( now > lockupEnds );
-        require( msg.sender == team );
+        require( msg.sender == founders );
 
         uint tokensToRelease = token.balanceOf(address(this));
-        bytes memory empty;
-        if ( token.transfer(msg.sender, tokensToRelease, empty) ) {
-            TokensReleased(msg.sender, tokensToRelease);
-        } else {
-            revert();
-        }
-    }
-
-    function tokenFallback(address _from, uint _tokens, bytes data) public {
-        require( msg.sender == address(token) );
-        require( _from == backend );
-        initializeHolding(bytesToAddress(data), _tokens);
-    }
-
-    function initializeHolding(address _to, uint _tokens) internal {
-        lockupEnds = now + 2 * 365 days;
-        team = _to;
-        StorageInitialized(_to, _tokens);
-    }
-
-    function bytesToAddress(bytes _b) internal pure returns (address) {
-        uint160 m = 0;
-        uint160 b = 0;
-
-        for (uint8 i = 0; i < 20; i++) {
-            m *= 256;
-            b = uint160(_b[i]);
-            m += (b);
-        }
-
-        return address(m);
+        require( token.transfer(msg.sender, tokensToRelease) );
+        emit TokensReleased(msg.sender, tokensToRelease);
     }
 }

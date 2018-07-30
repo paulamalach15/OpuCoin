@@ -1,166 +1,172 @@
-pragma solidity ^0.4.18;
+pragma solidity ^0.4.24;
 
-import "./interfaces/ERC223.sol";
+import "./math/SafeMath.sol";
 import "./ColdStorage.sol";
+import "./OPUCoin.sol";
+import "./Ownable.sol";
 import "./Vesting.sol";
 
-contract Allocation {
-    address public manager;
+contract Allocation is Ownable {
+    using SafeMath for uint256;
+
     address public backend;
     address public team;
     address public partners;
     address public toSendFromStorage;
-    address public networkStorage;
-    ERC223 public token;
+    OPUCoin public token;
     Vesting public vesting;
     ColdStorage public coldStorage;
 
-    bool public tokensReceived = false;
     uint public holdingParticipants;
-    uint public unsoldTokens;
-    uint8[10] public bonusTable = [50, 40, 35, 30, 25, 20, 15, 10, 5, 0];
-    uint8 public bonusStage = 0;
+    uint public holdingAllocations = 0;
+    uint public holdingPool;
     uint8 finalizationStage = 0;
 
     bool public emergencyPaused = false;
+    bool public finalizedHoldingsAndTeamTokens = false;
 
     uint constant mil = 1e6 * 1e18;
-    uint entireSupply = 12 * 1e9 * 1e18;
     // Token distribution table, all values in millions of tokens
-    uint constant teamTokens           = 1260 * mil;
-    uint constant partnersTokens       =  480 * mil; 
-    uint constant coldStorageTokens    =  600 * mil;
-    uint constant networkStorageTokens = 8880 * mil;
-    uint constant sellableTokens       =  780 * mil;
+    uint constant icoDistribution   = 1350 * mil;
+    uint constant teamTokens        = 675  * mil;
+    uint constant coldStorageTokens = 189  * mil;
+    uint constant partnersTokens    = 297  * mil; 
+    uint constant rewardsPool       = 189  * mil;
+
+    uint totalTokensSold = 0;
+    uint totalTokensRewarded = 0;
 
     event TokensAllocated(address _buyer, uint _tokens);
     event TokensAllocatedIntoHolding(address _buyer, uint _tokens);
+    event TokensMintedForRedemption(address _to, uint _tokens);
     event TokensSentIntoVesting(address _vesting, address _to, uint _tokens);
     event TokensSentIntoHolding(address _vesting, address _to, uint _tokens);
-    event AllocationFinished();
+    event HoldingAndTeamTokensFinalized();
 
     // Human interaction (only accepted from the address that launched the contract)
-    function Allocation(address _backend, address _token, address _team, 
-                        address _partners, address _toSendFromStorage, address _networkStorage) public {
+    constructor(address _backend, address _team, address _partners, address _toSendFromStorage) public {
         require( _backend           != 0x0 );
-        require( _token             != 0x0 );
         require( _team              != 0x0 );
         require( _partners          != 0x0 );
         require( _toSendFromStorage != 0x0 );
-        require( _networkStorage    != 0x0 );
 
-        manager           = msg.sender;
         backend           = _backend;
-        token             = ERC223(_token);
         team              = _team;
         partners          = _partners;
         toSendFromStorage = _toSendFromStorage;
-        networkStorage    = _networkStorage;
 
-        vesting = new Vesting(address(token));
+        token       = new OPUCoin();
+        vesting     = new Vesting(address(token), team);
         coldStorage = new ColdStorage(address(token));
     }
 
-    function emergencyPause() public owned(manager) unpaused {
-        emergencyPaused = true;
+    function emergencyPause() public onlyOwner unpaused { emergencyPaused = true; }
+
+    function emergencyUnpause() public onlyOwner paused { emergencyPaused = false; }
+
+    function allocate(
+        address _buyer, 
+        uint _tokensWithStageBonuses, 
+        uint _rewardsBonusTokens
+    ) 
+        public 
+        ownedBy(backend) 
+        unpaused 
+    {
+        uint tokensAllocated = _allocateTokens(_buyer, _tokensWithStageBonuses, _rewardsBonusTokens);
+        emit TokensAllocated(_buyer, tokensAllocated);
     }
 
-    function emergencyUnpause() public owned(manager) paused {
-        emergencyPaused = false;
+    function allocateIntoHolding(
+        address _buyer, 
+        uint _tokensWithStageBonuses, 
+        uint _rewardsBonusTokens
+    ) 
+        public 
+        ownedBy(backend) 
+        unpaused 
+    {
+        require( !finalizedHoldingsAndTeamTokens );
+        uint tokensAllocated = _allocateTokens(
+            address(vesting), 
+            _tokensWithStageBonuses, 
+            _rewardsBonusTokens
+        );
+        vesting.initializeVesting(_buyer, tokensAllocated);
+        emit TokensAllocatedIntoHolding(_buyer, tokensAllocated);
     }
 
-    // Backend interaction (only accepted from the address specified at launch)
-    function initializeAllocation(uint _holdingParticipants, uint _unsoldTokens) public owned(backend) {
-        require(_unsoldTokens <= sellableTokens );
-        holdingParticipants = _holdingParticipants;
-        unsoldTokens = _unsoldTokens;
+    function mintForRedemption(address _to, uint _tokens) public ownedBy(backend) unpaused {
+        require( _to != 0x0 );
+        token.mint(_to, _tokens);
+        emit TokensMintedForRedemption(_to, _tokens);
     }
 
-    function allocate(address _buyer, uint _tokensBeforeBonuses, 
-                                      uint _referralBonusTokens) public owned(backend) unpaused {
-        require( _buyer != 0x0 );
+    function finalizeHoldingAndTeamTokens(uint _holdingPoolTokens) public ownedBy(backend) unpaused {
+        require( !finalizedHoldingsAndTeamTokens );
+
+        finalizedHoldingsAndTeamTokens = true;
+
+        // Can exceed ICO token cap
+        token.mint(address(vesting), _holdingPoolTokens);
+        vesting.finalizeVestingAllocation(_holdingPoolTokens);
+
+        vestTokens(team, teamTokens);
+        holdTokens(toSendFromStorage, coldStorageTokens);
+        token.mint(partners, partnersTokens);
+        emit HoldingAndTeamTokensFinalized();
+    }
+
+    function optAddressIntoHolding(address _holder, uint _tokens) public ownedBy(backend) {
+        require( !finalizedHoldingsAndTeamTokens );
+
+        require( token.transfer(address(vesting), _tokens) );
+
+        vesting.initializeVesting(_holder, _tokens);
+        emit TokensSentIntoHolding(address(vesting), _holder, _tokens);
+    }
+
+    function _allocateTokens(
+        address _to, 
+        uint _tokensWithStageBonuses, 
+        uint _rewardsBonusTokens
+    ) 
+        internal 
+        unpaused 
+        returns (uint)
+    {
+        require( _to != 0x0 );
+
+        checkCapsAndUpdate(_tokensWithStageBonuses, _rewardsBonusTokens);
 
         // Calculate the total token sum to allocate
-        uint tokensToAllocate = calculateTokensToAllocate(_tokensBeforeBonuses, _referralBonusTokens);
+        uint tokensToAllocate = _tokensWithStageBonuses.add(_rewardsBonusTokens);
 
-        // Send the transfer
-        bytes memory empty;
-        token.transfer(_buyer, tokensToAllocate, empty);
-        TokensAllocated(_buyer, tokensToAllocate);
-    }
-
-    function allocateIntoHolding(address _buyer, uint _tokensBeforeBonuses, 
-                                                 uint _referralBonusTokens) public owned(backend) unpaused {
-        require( _buyer != 0x0 );
-
-        // Calculate the total token sum to allocate
-        uint tokensToAllocate = calculateTokensToAllocate(_tokensBeforeBonuses, _referralBonusTokens);
-        tokensToAllocate += unsoldTokens / holdingParticipants;
-
-        // Send the transfer
-        token.transfer(address(vesting), tokensToAllocate, toBytes(_buyer));
-        TokensAllocatedIntoHolding(_buyer, tokensToAllocate);
-    }
-
-    function advanceBonusPhase() public owned(backend) unpaused returns (uint8) {
-        require( bonusStage < bonusTable.length - 1);
-        bonusStage += 1;
-        return bonusStage;
-    }
-
-    function finalizeAllocation() public owned(backend) unpaused {
-        require( finalizationStage <= 3);
-        if (finalizationStage == 0) {
-            vestTokens(team, teamTokens);
-        } else if (finalizationStage == 1) {
-            vestTokens(partners, partnersTokens);
-        } else if (finalizationStage == 2) {
-            holdTokens(toSendFromStorage, coldStorageTokens);
-        } else if (finalizationStage == 3) {
-            bytes memory empty;
-            token.transfer(networkStorage, networkStorageTokens, empty);
-            AllocationFinished();
-        }
-        finalizationStage += 1;
-    }
-
-    function tokenFallback(address _from, uint _tokens, bytes _data) public {
-        require(_from == 0x0);
-        require(_tokens == entireSupply);
-        require(!tokensReceived);
-        tokensReceived = true;
-    }
-
-    function vestTokens(address _to, uint _tokens) internal {
-        token.transfer(address(vesting), _tokens, toBytes(_to));
-        TokensSentIntoVesting(address(vesting), _to, _tokens);
-    }
-
-    function holdTokens(address _to, uint _tokens) internal {
-        token.transfer(address(coldStorage), _tokens, toBytes(_to));
-        TokensSentIntoHolding(address(coldStorage), _to, _tokens);
-    }
-
-    function calculateTokensToAllocate(uint _tokensBeforeBonuses, uint _referralBonus) 
-                internal view returns (uint) {
-        uint stageBonus = _tokensBeforeBonuses * bonusTable[bonusStage] / 100;
-        uint tokensToAllocate = _tokensBeforeBonuses + stageBonus + _referralBonus;
-        assert( tokensToAllocate >= _tokensBeforeBonuses );
+        // Mint the tokens
+        require( token.mint(_to, tokensToAllocate) );
         return tokensToAllocate;
     }
 
-    function toBytes(address a) internal pure returns (bytes b) {
-        assembly {
-            let m := mload(0x40)
-            mstore(add(m, 20), xor(0x140000000000000000000000000000000000000000, a))
-            mstore(0x40, add(m, 52))
-            b := m
-        }
+    function checkCapsAndUpdate(uint _tokensToSell, uint _tokensToReward) internal {
+        uint newTotalTokensSold = totalTokensSold.add(_tokensToSell);
+        require( newTotalTokensSold <= icoDistribution );
+        totalTokensSold = newTotalTokensSold;
+
+        uint newTotalTokensRewarded = totalTokensRewarded.add(_tokensToReward);
+        require( newTotalTokensRewarded <= rewardsPool );
+        totalTokensRewarded = newTotalTokensRewarded;
     }
 
-    modifier owned(address _owner) {
-        require( msg.sender == _owner );
-        _;
+    function vestTokens(address _to, uint _tokens) internal {
+        require( token.mint(address(vesting), _tokens) );
+        vesting.initializeVesting( _to, _tokens );
+        emit TokensSentIntoVesting(address(vesting), _to, _tokens);
+    }
+
+    function holdTokens(address _to, uint _tokens) internal {
+        require( token.mint(address(coldStorage), _tokens) );
+        coldStorage.initializeHolding(_to, _tokens);
+        emit TokensSentIntoHolding(address(coldStorage), _to, _tokens);
     }
 
     modifier unpaused() {

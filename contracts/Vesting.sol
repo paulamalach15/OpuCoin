@@ -1,114 +1,114 @@
-pragma solidity ^0.4.18;
+pragma solidity ^0.4.24;
 
-import "./interfaces/ERC223.sol";
-import "./SafeMath.sol";
+import "./math/SafeMath.sol";
+import "./Ownable.sol";
+import "./Token/ERC20.sol";
 
-contract Vesting is SafeMath {
-    ERC223 token;
+contract Vesting is Ownable {
+    using SafeMath for uint;
+    using SafeMath for uint256;
+
+    ERC20 token;
     mapping (address => Holding) public holdings;
-    address backend;
+    address founders;
 
     uint constant periodInterval = 30 days;
-    uint8 constant totalPeriods = 12;
+    uint constant foundersHolding = 365 days;
+    uint constant bonusHolding = 0;
+    uint constant totalPeriods = 12;
+
+    uint public additionalHoldingPool = 0;
+    uint totalTokensCommitted = 0;
+
+    bool vestingStarted = false;
+    uint vestingStart = 0;
 
     struct Holding {
+        uint tokensCommitted;
         uint tokensRemaining;
-        uint tokensPerBatch;
-        uint lockupEnds;
-        uint8 periodsPassed;
-        uint nextPeriod;
+        uint batchesClaimed;
+        bool updatedForFinalization;
+        bool isFounder;
         bool isValue;
     }
 
     event TokensReleased(address _to, uint _tokensReleased, uint _tokensRemaining);
     event VestingInitialized(address _to, uint _tokens);
 
-    function Vesting(address _token) public {
+    constructor(address _token, address _founders) public {
         require( _token != 0x0);
-        token = ERC223(_token);
-        backend = msg.sender;
+        require(_founders != 0x0);
+        token = ERC20(_token);
+        founders = _founders;
     }
 
     function claimTokens() external {
         require( holdings[msg.sender].isValue );
-        require( now > holdings[msg.sender].lockupEnds );
-        require( now > holdings[msg.sender].nextPeriod );
+        require( vestingStarted );
+        uint personalVestingStart = 
+            (holdings[msg.sender].isFounder) ? (vestingStart.add(foundersHolding)) : (vestingStart);
 
+        require( now > personalVestingStart );
+
+        uint periodsPassed = now.sub(personalVestingStart).div(periodInterval);
+
+        uint batchesToClaim = periodsPassed.sub(holdings[msg.sender].batchesClaimed);
+        require( batchesToClaim > 0 );
+
+        if (!holdings[msg.sender].updatedForFinalization) {
+            holdings[msg.sender].updatedForFinalization = true;
+            holdings[msg.sender].tokensRemaining = (holdings[msg.sender].tokensRemaining).add(
+                (holdings[msg.sender].tokensCommitted).div(totalTokensCommitted).mul(additionalHoldingPool)
+            );
+        }
+
+        uint tokensPerBatch = (holdings[msg.sender].tokensRemaining).div(
+            totalPeriods.sub(holdings[msg.sender].batchesClaimed)
+        );
         uint tokensToRelease = 0;
-        uint tokensRemaining = holdings[msg.sender].tokensRemaining;
 
-        do {
-            holdings[msg.sender].periodsPassed += 1;
-            holdings[msg.sender].nextPeriod += periodInterval;
-            tokensToRelease += holdings[msg.sender].tokensPerBatch;
-        } while ((now > holdings[msg.sender].nextPeriod) && 
-                 (holdings[msg.sender].periodsPassed <= totalPeriods));
-
-        tokensRemaining -= tokensToRelease;
-
-        // If vesting has finished, just transfer the remaining tokens.
-        if (holdings[msg.sender].periodsPassed == totalPeriods) {
+        if (periodsPassed >= totalPeriods) {
             tokensToRelease = holdings[msg.sender].tokensRemaining;
-            // And delete the record
             delete holdings[msg.sender];
         } else {
-            holdings[msg.sender].tokensRemaining = tokensRemaining;
+            tokensToRelease = tokensPerBatch.mul(batchesToClaim);
+            holdings[msg.sender].tokensRemaining = (holdings[msg.sender].tokensRemaining).sub(tokensToRelease);
         }
 
-
-        bytes memory empty;
-        if ( token.transfer(msg.sender, tokensToRelease, empty) ) {
-            TokensReleased(msg.sender, tokensToRelease, tokensRemaining);
-        } else {
-            revert();
-        }
+        holdings[msg.sender].batchesClaimed = holdings[msg.sender].batchesClaimed.add(batchesToClaim);
+        require( token.transfer(msg.sender, tokensToRelease) );
+        emit TokensReleased(msg.sender, tokensToRelease, holdings[msg.sender].tokensRemaining);
     }
 
-    function tokenFallback(address _from, uint _tokens, bytes data) public {
-        require( msg.sender == address(token) );
-        require( _from == backend );
-        initializeVesting(bytesToAddress(data), _tokens, 1, totalPeriods);
+    function tokensRemainingInHolding(address _user) public view returns (uint) {
+        return holdings[_user].tokensRemaining;
+    }
+    
+    function initializeVesting(address _beneficiary, uint _tokens) onlyOwner public {
+        bool isFounder = (_beneficiary == founders);
+        _initializeVesting(_beneficiary, _tokens, isFounder);
     }
 
-    function initializeVesting(address _to, uint _tokens, uint8 _yearsHolding, uint _periods) internal {
-        uint tokensPerBatch;
-        uint lockupEnds = safeAdd(now, safeMul(_yearsHolding, 365 days));
-        uint nextPeriod;
-
-        assert( _periods != 0 );
-        tokensPerBatch = _tokens / _periods;
-        nextPeriod = safeAdd(lockupEnds, 30 days);
-
-        holdings[_to] = Holding(_tokens, 
-                                tokensPerBatch, 
-                                lockupEnds, 
-                                0, 
-                                nextPeriod, 
-                                true);
-
-        VestingInitialized(_to, _tokens);
+    function finalizeVestingAllocation(uint _holdingPoolTokens) onlyOwner public {
+        additionalHoldingPool = _holdingPoolTokens;
+        vestingStarted = true;
+        vestingStart = now;
     }
-    /*
-    struct Holding {
-        uint tokens;
-        uint tokensPerBatch;
-        uint lockupEnds;
-        uint periodsPassed;
-        uint nextPeriod;
-        bool isValue;
-        }
-        */
 
-    function bytesToAddress(bytes _b) internal pure returns (address) {
-        uint160 m = 0;
-        uint160 b = 0;
+    function _initializeVesting(address _to, uint _tokens, bool _isFounder) internal {
+        require( !holdings[_to].isValue );
 
-        for (uint8 i = 0; i < 20; i++) {
-            m *= 256;
-            b = uint160(_b[i]);
-            m += (b);
-        }
+        if (!_isFounder) totalTokensCommitted = totalTokensCommitted.add(_tokens);
 
-        return address(m);
-        }
+        holdings[_to] = Holding({
+            tokensCommitted: _tokens, 
+            tokensRemaining: _tokens,
+            batchesClaimed: 0, 
+            updatedForFinalization: (_isFounder) ? (true) : (false), 
+            isFounder: _isFounder,
+            isValue: true
+        });
+
+        emit VestingInitialized(_to, _tokens);
+    }
 }
