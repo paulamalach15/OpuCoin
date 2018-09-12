@@ -3,7 +3,7 @@ This source file has been copied with modification from https://github.com/OpenZ
 commit 2307467,  under MIT license. See LICENSE
 */
 
-pragma solidity ^0.4.24;
+pragma solidity 0.4.24;
 
 import "./BasicToken.sol";
 import "./ERC20.sol";
@@ -56,6 +56,7 @@ contract StandardToken is ERC20, BasicToken {
    * @param _value The amount of tokens to be spent.
    */
   function approve(address _spender, uint256 _value) public returns (bool) {
+    require( (allowed[msg.sender][_spender] == 0) || (_value == 0) );
     allowed[msg.sender][_spender] = _value;
     emit Approval(msg.sender, _spender, _value);
     return true;

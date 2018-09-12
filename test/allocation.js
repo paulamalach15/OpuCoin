@@ -23,22 +23,31 @@ contract("Allocation testing", async function(accounts) {
     const [manager, backend, founders, partners, coldStorage, holding, c1, c2, c3, c4] = accounts;
 
     it("allocation deploys", async () => {
-        allocation = await Allocation.new(backend, founders, partners, coldStorage, {from:manager});
+        allocation = await Allocation.new(backend, founders, partners, coldStorage, {from:manager, gas:6000000});
         assert.isOk(allocation && allocation.address, "allocation should have valid address");
         token = OPUCoin.at(await allocation.token());
         assert.isOk(token && token.address, "token should have valid address");
+    });
+
+    it("total supply is 0 at start", async () => {
+        let totalSupply = await(token.totalSupply());
+        assert.equal(Number(totalSupply), 0, "total supply not zero");
     });
 
     it("backend can perform an allocation", async () => {
         await allocation.allocate(c1, c1purchase, c1bounty, {from: backend});
         let c1tokens = Number(await token.balanceOf(c1));
         assert.equal(c1tokens, c1purchase + c1bounty, "wrong number of tokens allocated");
+        let totalSupply = await(token.totalSupply());
+        assert.equal(Number(totalSupply), c1tokens, "total supply not updated");
     });
 
     it("another allocation", async () => {
         await allocation.allocate(c2, c2purchase, c2bounty, {from: backend});
         let c2tokens = Number(await token.balanceOf(c2));
         assert.equal(c2tokens, c2purchase + c2bounty, "wrong number of tokens allocated");
+        let totalSupply = await(token.totalSupply());
+        assert.equal(Number(totalSupply), c1purchase+c1bounty+c2tokens, "total supply not updated");
     });
 
     it("allocations don't work when paused by manager", async () => {

@@ -3,7 +3,7 @@ This source file has been copied with modification from https://github.com/OpenZ
 commit 2307467,  under MIT license. See LICENSE
 */
 
-pragma solidity ^0.4.24;
+pragma solidity 0.4.24;
 
 import "./ERC20Basic.sol";
 

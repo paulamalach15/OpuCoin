@@ -1,4 +1,4 @@
-pragma solidity ^0.4.24;
+pragma solidity 0.4.24;
 
 import "./math/SafeMath.sol";
 import "./Ownable.sol";
@@ -8,7 +8,7 @@ contract ColdStorage is Ownable {
     using SafeMath for uint8;
     using SafeMath for uint256;
 
-    ERC20 token;
+    ERC20 public token;
 
     uint public lockupEnds;
     uint public lockupPeriod;
@@ -25,16 +25,6 @@ contract ColdStorage is Ownable {
         lockupPeriod = lockupYears.mul(365 days);
     }
 
-    function initializeHolding(address _to, uint _tokens) onlyOwner public {
-        require( !storageInitialized );
-        assert( token.balanceOf(address(this)) != 0 );
-
-        lockupEnds = now.add(lockupPeriod);
-        founders = _to;
-        storageInitialized = true;
-        emit StorageInitialized(_to, _tokens);
-    }
-
     function claimTokens() external {
         require( now > lockupEnds );
         require( msg.sender == founders );
@@ -42,5 +32,15 @@ contract ColdStorage is Ownable {
         uint tokensToRelease = token.balanceOf(address(this));
         require( token.transfer(msg.sender, tokensToRelease) );
         emit TokensReleased(msg.sender, tokensToRelease);
+    }
+
+    function initializeHolding(address _to, uint _tokens) public onlyOwner {
+        require( !storageInitialized );
+        assert( token.balanceOf(address(this)) != 0 );
+
+        lockupEnds = now.add(lockupPeriod);
+        founders = _to;
+        storageInitialized = true;
+        emit StorageInitialized(_to, _tokens);
     }
 }

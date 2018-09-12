@@ -1,4 +1,4 @@
-pragma solidity ^0.4.24;
+pragma solidity 0.4.24;
 
 import "./math/SafeMath.sol";
 import "./ColdStorage.sol";
@@ -17,24 +17,25 @@ contract Allocation is Ownable {
     Vesting public vesting;
     ColdStorage public coldStorage;
 
-    uint public holdingParticipants;
-    uint public holdingAllocations = 0;
-    uint public holdingPool;
-    uint8 finalizationStage = 0;
-
     bool public emergencyPaused = false;
     bool public finalizedHoldingsAndTeamTokens = false;
+    bool public mintingFinished = false;
 
-    uint constant mil = 1e6 * 1e18;
+    // All the numbers on the following 8 lines are lower than 10^30
+    // Which is in turn lower than 2^105, which is lower than 2^256
+    // So, no overflows are possible, the operations are safe.
+    uint constant internal MIL = 1e6 * 1e18;
     // Token distribution table, all values in millions of tokens
-    uint constant icoDistribution   = 1350 * mil;
-    uint constant teamTokens        = 675  * mil;
-    uint constant coldStorageTokens = 189  * mil;
-    uint constant partnersTokens    = 297  * mil; 
-    uint constant rewardsPool       = 189  * mil;
+    uint constant internal ICO_DISTRIBUTION    = 1350 * MIL;
+    uint constant internal TEAM_TOKENS         = 675  * MIL;
+    uint constant internal COLD_STORAGE_TOKENS = 189  * MIL;
+    uint constant internal PARTNERS_TOKENS     = 297  * MIL; 
+    uint constant internal REWARDS_POOL        = 189  * MIL;
 
-    uint totalTokensSold = 0;
-    uint totalTokensRewarded = 0;
+    uint internal totalTokensSold = 0;
+    uint internal totalTokensRewarded = 0;
+
+    bool internal initialized = false;
 
     event TokensAllocated(address _buyer, uint _tokens);
     event TokensAllocatedIntoHolding(address _buyer, uint _tokens);
@@ -44,7 +45,14 @@ contract Allocation is Ownable {
     event HoldingAndTeamTokensFinalized();
 
     // Human interaction (only accepted from the address that launched the contract)
-    constructor(address _backend, address _team, address _partners, address _toSendFromStorage) public {
+    constructor(
+        address _backend, 
+        address _team, 
+        address _partners, 
+        address _toSendFromStorage
+    ) 
+        public 
+    {
         require( _backend           != 0x0 );
         require( _team              != 0x0 );
         require( _partners          != 0x0 );
@@ -72,6 +80,7 @@ contract Allocation is Ownable {
         public 
         ownedBy(backend) 
         unpaused 
+        mintingEnabled
     {
         uint tokensAllocated = _allocateTokens(_buyer, _tokensWithStageBonuses, _rewardsBonusTokens);
         emit TokensAllocated(_buyer, tokensAllocated);
@@ -85,6 +94,7 @@ contract Allocation is Ownable {
         public 
         ownedBy(backend) 
         unpaused 
+        mintingEnabled
     {
         require( !finalizedHoldingsAndTeamTokens );
         uint tokensAllocated = _allocateTokens(
@@ -96,28 +106,54 @@ contract Allocation is Ownable {
         emit TokensAllocatedIntoHolding(_buyer, tokensAllocated);
     }
 
-    function mintForRedemption(address _to, uint _tokens) public ownedBy(backend) unpaused {
+    function mintForRedemption(
+        address _to, 
+        uint _tokens
+    ) 
+        public 
+        ownedBy(backend) 
+        unpaused 
+        mintingEnabled 
+    {
         require( _to != 0x0 );
         token.mint(_to, _tokens);
         emit TokensMintedForRedemption(_to, _tokens);
     }
 
-    function finalizeHoldingAndTeamTokens(uint _holdingPoolTokens) public ownedBy(backend) unpaused {
+    function finalizeHoldingAndTeamTokens(
+        uint _holdingPoolTokens
+    ) 
+        public 
+        ownedBy(backend) 
+        unpaused 
+    {
         require( !finalizedHoldingsAndTeamTokens );
 
         finalizedHoldingsAndTeamTokens = true;
+
+        vestTokens(team, TEAM_TOKENS);
+        holdTokens(toSendFromStorage, COLD_STORAGE_TOKENS);
+        token.mint(partners, PARTNERS_TOKENS);
 
         // Can exceed ICO token cap
         token.mint(address(vesting), _holdingPoolTokens);
         vesting.finalizeVestingAllocation(_holdingPoolTokens);
 
-        vestTokens(team, teamTokens);
-        holdTokens(toSendFromStorage, coldStorageTokens);
-        token.mint(partners, partnersTokens);
         emit HoldingAndTeamTokensFinalized();
     }
 
-    function optAddressIntoHolding(address _holder, uint _tokens) public ownedBy(backend) {
+    function finishMinting() public ownedBy(backend) mintingEnabled {
+        mintingFinished = true;
+        token.finishMinting();
+    }
+
+    function optAddressIntoHolding(
+        address _holder, 
+        uint _tokens
+    ) 
+        public 
+        ownedBy(backend) 
+    {
         require( !finalizedHoldingsAndTeamTokens );
 
         require( token.transfer(address(vesting), _tokens) );
@@ -149,11 +185,11 @@ contract Allocation is Ownable {
 
     function checkCapsAndUpdate(uint _tokensToSell, uint _tokensToReward) internal {
         uint newTotalTokensSold = totalTokensSold.add(_tokensToSell);
-        require( newTotalTokensSold <= icoDistribution );
+        require( newTotalTokensSold <= ICO_DISTRIBUTION );
         totalTokensSold = newTotalTokensSold;
 
         uint newTotalTokensRewarded = totalTokensRewarded.add(_tokensToReward);
-        require( newTotalTokensRewarded <= rewardsPool );
+        require( newTotalTokensRewarded <= REWARDS_POOL );
         totalTokensRewarded = newTotalTokensRewarded;
     }
 
@@ -176,6 +212,11 @@ contract Allocation is Ownable {
 
     modifier paused() {
         require( emergencyPaused );
+        _;
+    }
+
+    modifier mintingEnabled() {
+        require( !mintingFinished );
         _;
     }
 }

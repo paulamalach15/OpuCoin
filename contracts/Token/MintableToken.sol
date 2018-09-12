@@ -3,7 +3,7 @@ This source file has been copied with modification from https://github.com/OpenZ
 commit 2307467, under MIT license. See LICENSE
 */
 
-pragma solidity ^0.4.24;
+pragma solidity 0.4.24;
 
 import "./StandardToken.sol";
 import "../Ownable.sol";
@@ -18,9 +18,9 @@ contract MintableToken is StandardToken, Ownable {
     event Mint(address indexed to, uint256 amount);
     event MintFinished();
 
-    uint constant public supplyHardCap = 12 * 1e9 * 1e18;
+    // Overflow check: 12 *1e9 * 1e18 < 10^30 < 2^105 < 2^256
+    uint constant public SUPPLY_HARD_CAP = 12 * 1e9 * 1e18;
     bool public mintingFinished = false;
-
 
     modifier canMint() {
         require(!mintingFinished);
@@ -47,7 +47,7 @@ contract MintableToken is StandardToken, Ownable {
         canMint
         returns (bool)
     {
-        require( totalSupply_.add(_amount) <= supplyHardCap );
+        require( totalSupply_.add(_amount) <= SUPPLY_HARD_CAP );
         totalSupply_ = totalSupply_.add(_amount);
         balances[_to] = balances[_to].add(_amount);
         emit Mint(_to, _amount);
@@ -59,7 +59,7 @@ contract MintableToken is StandardToken, Ownable {
      * @dev Function to stop minting new tokens.
      * @return True if the operation was successful.
      */
-    function finishMinting() onlyOwner canMint public returns (bool) {
+    function finishMinting() public onlyOwner canMint returns (bool) {
         mintingFinished = true;
         emit MintFinished();
         return true;
