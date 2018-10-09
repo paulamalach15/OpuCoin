@@ -35,8 +35,6 @@ contract Allocation is Ownable {
     uint internal totalTokensSold = 0;
     uint internal totalTokensRewarded = 0;
 
-    bool internal initialized = false;
-
     event TokensAllocated(address _buyer, uint _tokens);
     event TokensAllocatedIntoHolding(address _buyer, uint _tokens);
     event TokensMintedForRedemption(address _to, uint _tokens);
@@ -106,20 +104,6 @@ contract Allocation is Ownable {
         emit TokensAllocatedIntoHolding(_buyer, tokensAllocated);
     }
 
-    function mintForRedemption(
-        address _to, 
-        uint _tokens
-    ) 
-        public 
-        ownedBy(backend) 
-        unpaused 
-        mintingEnabled 
-    {
-        require( _to != 0x0 );
-        token.mint(_to, _tokens);
-        emit TokensMintedForRedemption(_to, _tokens);
-    }
-
     function finalizeHoldingAndTeamTokens(
         uint _holdingPoolTokens
     ) 
@@ -139,12 +123,10 @@ contract Allocation is Ownable {
         token.mint(address(vesting), _holdingPoolTokens);
         vesting.finalizeVestingAllocation(_holdingPoolTokens);
 
-        emit HoldingAndTeamTokensFinalized();
-    }
-
-    function finishMinting() public ownedBy(backend) mintingEnabled {
         mintingFinished = true;
         token.finishMinting();
+
+        emit HoldingAndTeamTokensFinalized();
     }
 
     function optAddressIntoHolding(
