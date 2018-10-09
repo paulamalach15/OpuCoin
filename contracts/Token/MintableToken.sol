@@ -18,8 +18,8 @@ contract MintableToken is StandardToken, Ownable {
     event Mint(address indexed to, uint256 amount);
     event MintFinished();
 
-    // Overflow check: 12 *1e9 * 1e18 < 10^30 < 2^105 < 2^256
-    uint constant public SUPPLY_HARD_CAP = 12 * 1e9 * 1e18;
+    // Overflow check: 2700 *1e6 * 1e18 < 10^30 < 2^105 < 2^256
+    uint constant public SUPPLY_HARD_CAP = 2700 * 1e6 * 1e18;
     bool public mintingFinished = false;
 
     modifier canMint() {
