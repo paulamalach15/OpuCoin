@@ -19,7 +19,7 @@ contract ColdStorage is Ownable {
     event TokensReleased(address _to, uint _tokensReleased);
 
     constructor(address _token) public {
-        require( _token != 0x0 );
+        require( _token != address(0) );
         token = ERC20(_token);
         uint lockupYears = 2;
         lockupPeriod = lockupYears.mul(365 days);
@@ -34,13 +34,14 @@ contract ColdStorage is Ownable {
         emit TokensReleased(msg.sender, tokensToRelease);
     }
 
-    function initializeHolding(address _to, uint _tokens) public onlyOwner {
+    function initializeHolding(address _to) public onlyOwner {
+        uint tokens = token.balanceOf(address(this));
         require( !storageInitialized );
-        assert( token.balanceOf(address(this)) != 0 );
+        require( tokens != 0 );
 
         lockupEnds = now.add(lockupPeriod);
         founders = _to;
         storageInitialized = true;
-        emit StorageInitialized(_to, _tokens);
+        emit StorageInitialized(_to, tokens);
     }
 }

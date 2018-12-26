@@ -41,6 +41,10 @@ contract Allocation is Ownable {
     event TokensSentIntoVesting(address _vesting, address _to, uint _tokens);
     event TokensSentIntoHolding(address _vesting, address _to, uint _tokens);
     event HoldingAndTeamTokensFinalized();
+    event BackendUpdated(address oldBackend, address newBackend);
+    event TeamUpdated(address oldTeam, address newTeam);
+    event PartnersUpdated(address oldPartners, address newPartners);
+    event ToSendFromStorageUpdated(address oldToSendFromStorage, address newToSendFromStorage);
 
     // Human interaction (only accepted from the address that launched the contract)
     constructor(
@@ -51,10 +55,10 @@ contract Allocation is Ownable {
     ) 
         public 
     {
-        require( _backend           != 0x0 );
-        require( _team              != 0x0 );
-        require( _partners          != 0x0 );
-        require( _toSendFromStorage != 0x0 );
+        require( _backend           != address(0) );
+        require( _team              != address(0) );
+        require( _partners          != address(0) );
+        require( _toSendFromStorage != address(0) );
 
         backend           = _backend;
         team              = _team;
@@ -77,7 +81,6 @@ contract Allocation is Ownable {
     ) 
         public 
         ownedBy(backend) 
-        unpaused 
         mintingEnabled
     {
         uint tokensAllocated = _allocateTokens(_buyer, _tokensWithStageBonuses, _rewardsBonusTokens);
@@ -91,10 +94,8 @@ contract Allocation is Ownable {
     ) 
         public 
         ownedBy(backend) 
-        unpaused 
         mintingEnabled
     {
-        require( !finalizedHoldingsAndTeamTokens );
         uint tokensAllocated = _allocateTokens(
             address(vesting), 
             _tokensWithStageBonuses, 
@@ -138,7 +139,7 @@ contract Allocation is Ownable {
     {
         require( !finalizedHoldingsAndTeamTokens );
 
-        require( token.transfer(address(vesting), _tokens) );
+        require( token.mint(address(vesting), _tokens) );
 
         vesting.initializeVesting(_holder, _tokens);
         emit TokensSentIntoHolding(address(vesting), _holder, _tokens);
@@ -153,7 +154,7 @@ contract Allocation is Ownable {
         unpaused 
         returns (uint)
     {
-        require( _to != 0x0 );
+        require( _to != address(0) );
 
         checkCapsAndUpdate(_tokensWithStageBonuses, _rewardsBonusTokens);
 
@@ -183,8 +184,32 @@ contract Allocation is Ownable {
 
     function holdTokens(address _to, uint _tokens) internal {
         require( token.mint(address(coldStorage), _tokens) );
-        coldStorage.initializeHolding(_to, _tokens);
+        coldStorage.initializeHolding(_to);
         emit TokensSentIntoHolding(address(coldStorage), _to, _tokens);
+    }
+
+    function updateBackend(address _newBackend) public onlyOwner {
+        require(_newBackend != address(0));
+        backend = _newBackend;
+        emit BackendUpdated(backend, _newBackend);
+    }
+
+    function updateTeam(address _newTeam) public onlyOwner {
+        require(_newTeam != address(0));
+        team = _newTeam;
+        emit TeamUpdated(team, _newTeam);
+    }
+
+    function updatePartners(address _newPartners) public onlyOwner {
+        require(_newPartners != address(0));
+        partners = _newPartners;
+        emit PartnersUpdated(partners, _newPartners);
+    }
+
+    function updateToSendFromStorage(address _newToSendFromStorage) public onlyOwner {
+        require(_newToSendFromStorage != address(0));
+        toSendFromStorage = _newToSendFromStorage;
+        emit ToSendFromStorageUpdated(toSendFromStorage, _newToSendFromStorage);
     }
 
     modifier unpaused() {
